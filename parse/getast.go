@@ -1,16 +1,20 @@
 package parse
 
 import (
+	"bytes"
+	"errors"
 	"fmt"
 	"go/ast"
 	"go/parser"
+	"go/printer"
 	"go/token"
 	"os"
 	"reflect"
 	"sort"
+	"strconv"
 	"strings"
 
-	"github.com/tinylib/msgp/gen"
+	"github.com/aggronmagi/csmsgp2go/gen"
 )
 
 // A FileSet is the in-memory representation of a
@@ -26,6 +30,8 @@ type FileSet struct {
 	NewTime       bool                // Set to use -1 extension for time.Time
 	tagName       string              // tag to read field names from
 	pointerRcv    bool                // generate with pointer receivers.
+
+	FSet *token.FileSet // use for prompt error
 }
 
 // File parses a file at the relative path
@@ -87,18 +93,96 @@ func File(name string, unexported bool) (*FileSet, error) {
 		return nil, fmt.Errorf("no definitions in %s", name)
 	}
 
-	fs.applyEarlyDirectives()
-	fs.process()
-	fs.applyDirectives()
-	fs.propInline()
+	fs.FSet = fset
+
+	if err = fs.applyEarlyDirectives(); err != nil {
+		return nil, err
+	}
+	if err = fs.process(); err != nil {
+		return nil, err
+	}
+	if err = fs.applyDirectives(); err != nil {
+		return nil, err
+	}
+	if err = fs.propInline(); err != nil {
+		return nil, err
+	}
+
+	fs.sortAndFillMsgFields()
 
 	return fs, nil
+}
+
+// Format printer.Fprint wrap.
+func (f *FileSet) Format(node interface{}) string {
+	buf := &bytes.Buffer{}
+	_ = printer.Fprint(buf, f.FSet, node)
+	return buf.String()
+}
+
+func (f *FileSet) sortAndFillMsgFields() {
+	spaceHolder := &gen.NilPlaceholder{}
+	for _, elem := range f.Identities {
+		// fix struct
+		if s, ok := elem.(*gen.Struct); ok {
+			if len(s.Fields) < 1 {
+				continue
+			}
+			flagSet := make(map[uint16]struct{})
+			maxId := uint16(0)
+			for _, field := range s.Fields {
+				flagSet[field.FieldTag] = struct{}{}
+				if field.FieldTag > maxId {
+					maxId = field.FieldTag
+				}
+				field.FieldElem = fixCsharpString(field.FieldElem)
+			}
+			if int(maxId)+1 == len(s.Fields) {
+				continue
+			}
+			for i := uint16(0); i <= maxId; i++ {
+				if _, ok := flagSet[i]; ok {
+					continue
+				}
+				s.Fields = append(s.Fields, gen.StructField{
+					FieldTag:  i,
+					FieldElem: spaceHolder,
+				})
+			}
+			sort.Slice(s.Fields, func(i, j int) bool {
+				return s.Fields[i].FieldTag < s.Fields[j].FieldTag
+			})
+		}
+	}
+}
+
+func fixCsharpString(elem gen.Elem) gen.Elem {
+	switch v := elem.(type) {
+	case *gen.BaseElem:
+		if v.Value == gen.String {
+			return &gen.CsharpString{}
+		}
+	case *gen.Ptr:
+		v.Value = fixCsharpString(v.Value)
+	case *gen.Map:
+		// map key not set csharp string.
+		v.Value = fixCsharpString(v.Value)
+	case *gen.Slice:
+		v.Els = fixCsharpString(v.Els)
+	case *gen.Array:
+		v.Els = fixCsharpString(v.Els)
+	case *gen.Struct:
+		for i := range v.Fields {
+			v.Fields[i].FieldElem = fixCsharpString(v.Fields[i].FieldElem)
+		}
+	}
+	return elem
 }
 
 // applyDirectives applies all of the directives that
 // are known to the parser. additional method-specific
 // directives remain in f.Directives
-func (f *FileSet) applyDirectives() {
+func (f *FileSet) applyDirectives() error {
 	newdirs := make([]string, 0, len(f.Directives))
 	for _, d := range f.Directives {
 		chunks := strings.Split(d, " ")
@@ -108,6 +192,7 @@ func (f *FileSet) applyDirectives() {
 				err := fn(chunks, f)
 				if err != nil {
 					warnf("directive error: %s", err)
+					return fmt.Errorf("directive %v error: %w", chunks, err)
 				}
 				popstate()
 			} else {
@@ -116,11 +201,12 @@ func (f *FileSet) applyDirectives() {
 		}
 	}
 	f.Directives = newdirs
+	return nil
 }
 
 // applyEarlyDirectives applies all early directives needed before process() is called.
 // additional directives remain in f.Directives for future processing
-func (f *FileSet) applyEarlyDirectives() {
+func (f *FileSet) applyEarlyDirectives() error {
 	newdirs := make([]string, 0, len(f.Directives))
 	for _, d := range f.Directives {
 		parts := strings.Split(d, " ")
@@ -132,6 +218,8 @@ func (f *FileSet) applyEarlyDirectives() {
 			err := fn(parts, f)
 			if err != nil {
 				warnf("early directive error: %s", err)
+				err = fmt.Errorf("early directive error: %w", err)
+				return err
 			}
 			popstate()
 		} else {
@@ -139,6 +227,7 @@ func (f *FileSet) applyEarlyDirectives() {
 		}
 	}
 	f.Directives = newdirs
+	return nil
 }
 
 // A linkset is a graph of unresolved
@@ -164,7 +253,7 @@ func (f *FileSet) applyEarlyDirectives() {
 // figuring out that D is just a uint64.
 type linkset map[string]*gen.BaseElem
 
-func (f *FileSet) resolve(ls linkset) {
+func (f *FileSet) resolve(ls linkset) error {
 	progress := true
 	for progress && len(ls) > 0 {
 		progress = false
@@ -184,22 +273,32 @@ func (f *FileSet) resolve(ls linkset) {
 		}
 	}
 
+	if len(ls) < 1 {
+		return nil
+	}
+
 	// what's left can't be resolved
+	errTip := "couldn't resolve type."
 	for name, elem := range ls {
 		warnf("couldn't resolve type %s (%s)\n", name, elem.TypeName())
+		errTip += fmt.Sprintf(" %s-(%s)", name, elem.TypeName())
 	}
+	return errors.New(errTip)
 }
 
 // process takes the contents of f.Specs and
 // uses them to populate f.Identities
-func (f *FileSet) process() {
+func (f *FileSet) process() error {
 	deferred := make(linkset)
 parse:
 	for name, def := range f.Specs {
 		pushstate(name)
-		el := f.parseExpr(def)
+		el, err := f.parseExpr(def)
+		if err != nil {
+			return fmt.Errorf("parse %s failed,%w", f.Format(def), err)
+		}
 		if el == nil {
-			warnf("failed to parse")
+			warnf("failed to parse %s", f.Format(def))
 			popstate()
 			continue parse
 		}
@@ -218,8 +317,9 @@ parse:
 	}
 
 	if len(deferred) > 0 {
-		f.resolve(deferred)
+		return f.resolve(deferred)
 	}
+	return nil
 }
 
 func strToMethod(s string) gen.Method {
@@ -338,14 +438,17 @@ func fieldName(f *ast.Field) string {
 	}
 }
 
-func (fs *FileSet) parseFieldList(fl *ast.FieldList) []gen.StructField {
+func (fs *FileSet) parseFieldList(fl *ast.FieldList, maxIdx *uint16) ([]gen.StructField, error) {
 	if fl == nil || fl.NumFields() == 0 {
-		return nil
+		return nil, nil
 	}
 	out := make([]gen.StructField, 0, fl.NumFields())
 	for _, field := range fl.List {
 		pushstate(fieldName(field))
-		fds := fs.getField(field)
+		fds, err := fs.getField(field, maxIdx)
+		if err != nil {
+			return nil, fmt.Errorf("field %s parse failed,%w", fs.Format(fl), err)
+		}
 		if len(fds) > 0 {
 			out = append(out, fds...)
 		} else {
@@ -353,12 +456,12 @@ func (fs *FileSet) parseFieldList(fl *ast.FieldList) []gen.StructField {
 		}
 		popstate()
 	}
-	return out
+	return out, nil
 }
 
 // translate *ast.Field into []gen.StructField
-func (fs *FileSet) getField(f *ast.Field) []gen.StructField {
-	sf := make([]gen.StructField, 1)
+func (fs *FileSet) getField(f *ast.Field, maxIdx *uint16) (sf []gen.StructField, err error) {
+	sf = make([]gen.StructField, 1)
 	var extension, flatten bool
 	// parse tag; otherwise field name is field tag
 	if f.Tag != nil {
@@ -383,50 +486,83 @@ func (fs *FileSet) getField(f *ast.Field) []gen.StructField {
 		}
 		// ignore "-" fields
 		if tags[0] == "-" {
-			return nil
+			sf = nil
+			return
 		}
-		sf[0].FieldTag = tags[0]
-		sf[0].FieldTagParts = tags
-		sf[0].RawTag = f.Tag.Value
+		if !flatten {
+			if len(tags[0]) > 0 {
+				idx, err := strconv.ParseUint(tags[0], 10, 16)
+				if err != nil {
+					return nil, fmt.Errorf("invalid index %q: %w", tags[0], err)
+				}
+				sf[0].FieldTag = uint16(idx)
+				*maxIdx = uint16(idx) + 1
+			} else {
+				sf[0].FieldTag = *maxIdx
+				*maxIdx++
+			}
+
+			sf[0].FieldTagParts = tags
+			sf[0].RawTag = f.Tag.Value
+		} else {
+			if len(tags[0]) > 0 {
+				idx, err := strconv.ParseUint(tags[0], 10, 16)
+				if err != nil {
+					return nil, fmt.Errorf("invalid index %q: %w", tags[0], err)
+				}
+				*maxIdx = uint16(idx)
+			}
+			if len(f.Names) != 0 {
+				return nil, fmt.Errorf("flatten field must be anonymous field")
+			}
+		}
+	} else {
+		sf[0].FieldTag = *maxIdx
+		*maxIdx++
 	}
 
-	ex := fs.parseExpr(f.Type)
+	ex, err := fs.parseExpr(f.Type)
+	if err != nil {
+		return nil, err
+	}
 	if ex == nil {
-		return nil
+		return nil, nil
 	}
 
 	// parse field name
 	switch len(f.Names) {
 	case 0:
 		if flatten {
-			return fs.getFieldsFromEmbeddedStruct(f.Type)
+			return fs.getFieldsFromEmbeddedStruct(f.Type, maxIdx)
 		} else {
 			sf[0].FieldName = embedded(f.Type)
 		}
 	case 1:
 		sf[0].FieldName = f.Names[0].Name
 	default:
+		//return nil, fmt.Errorf("multiple field names not supported: %s", f.Names)
 		// this is for a multiple in-line declaration,
 		// e.g. type A struct { One, Two int }
 		sf = sf[0:0]
 		for _, nm := range f.Names {
 			sf = append(sf, gen.StructField{
-				FieldTag:  nm.Name,
+				FieldTag:  *maxIdx, //nm.Name,
 				FieldName: nm.Name,
 				FieldElem: ex.Copy(),
 			})
+			*maxIdx++
 		}
-		return sf
+		return sf, nil
 	}
 	sf[0].FieldElem = ex
-	if sf[0].FieldTag == "" {
-		sf[0].FieldTag = sf[0].FieldName
-		if len(sf[0].FieldTagParts) <= 1 {
-			sf[0].FieldTagParts = []string{sf[0].FieldTag}
-		} else {
-			sf[0].FieldTagParts = append([]string{sf[0].FieldName}, sf[0].FieldTagParts[1:]...)
-		}
-	}
+	// if sf[0].FieldTag == "" {
+	// 	sf[0].FieldTag = sf[0].FieldName
+	// 	if len(sf[0].FieldTagParts) <= 1 {
+	// 		sf[0].FieldTagParts = []string{sf[0].FieldTag}
+	// 	} else {
+	// 		sf[0].FieldTagParts = append([]string{sf[0].FieldName}, sf[0].FieldTagParts[1:]...)
+	// 	}
+	// }
 
 	// validate extension
 	if extension {
@@ -436,31 +572,36 @@ func (fs *FileSet) getField(f *ast.Field) []gen.StructField {
 				b.Value = gen.Ext
 			} else {
 				warnf("couldn't cast to extension.")
-				return nil
+				return nil, fmt.Errorf("couldn't cast to extension %s.", fs.Format(ex.Value))
 			}
 		case *gen.BaseElem:
 			ex.Value = gen.Ext
 		default:
 			warnf("couldn't cast to extension.")
-			return nil
+			return nil, fmt.Errorf("couldn't cast to extension %s.", fs.Format(ex))
 		}
 	}
-	return sf
+	return sf, nil
 }
 
-func (fs *FileSet) getFieldsFromEmbeddedStruct(f ast.Expr) []gen.StructField {
+func (fs *FileSet) getFieldsFromEmbeddedStruct(f ast.Expr, maxIdx *uint16) ([]gen.StructField, error) {
 	switch f := f.(type) {
 	case *ast.Ident:
 		s := fs.Specs[f.Name]
 		switch s := s.(type) {
 		case *ast.StructType:
-			return fs.parseFieldList(s.Fields)
+			return fs.parseFieldList(s.Fields, maxIdx)
 		default:
-			return nil
+			warnf("%s disabled, not struct type", fs.Format(f))
+			return nil, fmt.Errorf("%s not struct type", fs.Format(f))
 		}
+	case *ast.StarExpr:
+		warnf("%s disabled, StarExpr not support type", fs.Format(f))
+		return nil, fmt.Errorf("%s not support StarExpr type", fs.Format(f))
 	default:
 		// other possibilities are disallowed
-		return nil
+		warnf("%s other possibilities are disallowed", fs.Format(f))
+		return nil, fmt.Errorf("%s. other possibilities are disallowed", fs.Format(f)) // errors.New("other possibilities are disallowed")
 	}
 }
 
@@ -518,16 +659,34 @@ func stringify(e ast.Expr) string {
 // - *ast.StructType (struct {})
 // - *ast.SelectorExpr (a.B)
 // - *ast.InterfaceType (interface {})
-func (fs *FileSet) parseExpr(e ast.Expr) gen.Elem {
+func (fs *FileSet) parseExpr(e ast.Expr) (gen.Elem, error) {
 	switch e := e.(type) {
 
 	case *ast.MapType:
-		if k, ok := e.Key.(*ast.Ident); ok && k.Name == "string" {
-			if in := fs.parseExpr(e.Value); in != nil {
-				return &gen.Map{Value: in}
-			}
+		// parse key type
+		kt, err := fs.parseExpr(e.Key)
+		if err != nil {
+			return nil, err
 		}
-		return nil
+		if kt == nil {
+			return nil, nil
+		}
+		// check map key valid key
+		kname := kt.TypeName()
+		if kname != "string" && !strings.HasPrefix(kname, "uint") && !strings.HasPrefix(kname, "int") {
+			// 仅支持 string,int...,uint...
+			return nil, errors.New("map key only support string, int...,uint...")
+		}
+
+		// parse value type
+		value, err := fs.parseExpr(e.Value)
+		if err != nil {
+			return nil, fmt.Errorf("map value parse failed,%w", err)
+		}
+		if value != nil {
+			return &gen.Map{Key: kt, Value: value}, nil
+		}
+		return nil, fmt.Errorf("not support map value type")
 
 	case *ast.Ident:
 		b := gen.Ident(e.Name)
@@ -538,24 +697,29 @@ func (fs *FileSet) parseExpr(e ast.Expr) gen.Elem {
 		if b.Value == gen.IDENT {
 			if _, ok := fs.Specs[e.Name]; !ok {
 				warnf("non-local identifier: %s\n", e.Name)
+			} else {
+				println("local identifier: ", e.Name)
 			}
 		}
-		return b
+		return b, nil
 
 	case *ast.ArrayType:
 
 		// special case for []byte
 		if e.Len == nil {
 			if i, ok := e.Elt.(*ast.Ident); ok && i.Name == "byte" {
-				return &gen.BaseElem{Value: gen.Bytes}
+				return &gen.BaseElem{Value: gen.Bytes}, nil
 			}
 		}
 
 		// return early if we don't know
 		// what the slice element type is
-		els := fs.parseExpr(e.Elt)
+		els, err := fs.parseExpr(e.Elt)
+		if err != nil {
+			return nil, err
+		}
 		if els == nil {
-			return nil
+			return nil, nil
 		}
 
 		// array and not a slice
@@ -565,47 +729,57 @@ func (fs *FileSet) parseExpr(e ast.Expr) gen.Elem {
 				return &gen.Array{
 					Size: s.Value,
 					Els:  els,
-				}
+				}, nil
 
 			case *ast.Ident:
 				return &gen.Array{
 					Size: s.String(),
 					Els:  els,
-				}
+				}, nil
 
 			case *ast.SelectorExpr:
 				return &gen.Array{
 					Size: stringify(s),
 					Els:  els,
-				}
+				}, nil
 
 			default:
-				return nil
+				return nil, nil
 			}
 		}
-		return &gen.Slice{Els: els}
+		return &gen.Slice{Els: els}, nil
 
 	case *ast.StarExpr:
-		if v := fs.parseExpr(e.X); v != nil {
-			return &gen.Ptr{Value: v}
-		}
-		return nil
+		// if v, err := fs.parseExpr(e.X); err != nil {
+		// 	return nil, err
+		// } else if v != nil {
+		// 	return &gen.Ptr{Value: v}, nil
+		// }
+		// return nil, fmt.Errorf("star expr [%s] parse failed", fs.Format(e))
+		// NOTE: 不支持指针类型,否则会导致行为和csharp不一致
+		return nil, fmt.Errorf("not support star expr [%s]", fs.Format(e))
 
 	case *ast.StructType:
-		return &gen.Struct{Fields: fs.parseFieldList(e.Fields)}
+		var maxIdx uint16
+		fields, err := fs.parseFieldList(e.Fields, &maxIdx)
+		if err != nil {
+			return nil, err
+		}
+
+		return &gen.Struct{Fields: fields}, nil
 
 	case *ast.SelectorExpr:
-		return gen.Ident(stringify(e))
+		return gen.Ident(stringify(e)), nil
 
 	case *ast.InterfaceType:
 		// support `interface{}`
 		if len(e.Methods.List) == 0 {
-			return &gen.BaseElem{Value: gen.Intf}
+			return &gen.BaseElem{Value: gen.Intf}, nil
 		}
-		return nil
+		return nil, errors.New("invalid interface type")
 
 	default: // other types not supported
-		return nil
+		return nil, errors.New("types not supported")
 	}
 }
 

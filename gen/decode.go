@@ -3,6 +3,7 @@ package gen
 import (
 	"io"
 	"strconv"
+	"strings"
 )
 
 func decode(w io.Writer) *decodeGen {
@@ -57,11 +58,11 @@ func (d *decodeGen) gStruct(s *Struct) {
 	if !d.p.ok() {
 		return
 	}
-	if s.AsTuple {
-		d.structAsTuple(s)
-	} else {
-		d.structAsMap(s)
-	}
+	// if s.AsTuple {
+	d.structAsTuple(s)
+	// } else {
+	// 	d.structAsMap(s)
+	// }
 }
 
 func (d *decodeGen) assignAndCheck(name string, typ string) {
@@ -101,84 +102,84 @@ func (d *decodeGen) structAsTuple(s *Struct) {
 	}
 }
 
-func (d *decodeGen) structAsMap(s *Struct) {
-	d.needsField()
-	sz := randIdent()
-	d.p.declare(sz, u32)
-	d.assignAndCheck(sz, mapHeader)
+// func (d *decodeGen) structAsMap(s *Struct) {
+// 	d.needsField()
+// 	sz := randIdent()
+// 	d.p.declare(sz, u32)
+// 	d.assignAndCheck(sz, mapHeader)
 
-	oeCount := s.CountFieldTagPart("omitempty") + s.CountFieldTagPart("omitzero")
-	if !d.ctx.clearOmitted {
-		oeCount = 0
-	}
-	bm := bmask{
-		bitlen:  oeCount,
-		varname: sz + "Mask",
-	}
-	if oeCount > 0 {
-		// Declare mask
-		d.p.printf("\n%s", bm.typeDecl())
-		d.p.printf("\n_ = %s", bm.varname)
-	}
-	// Index to field idx of each emitted
-	oeEmittedIdx := []int{}
+// 	oeCount := s.CountFieldTagPart("omitempty") + s.CountFieldTagPart("omitzero")
+// 	if !d.ctx.clearOmitted {
+// 		oeCount = 0
+// 	}
+// 	bm := bmask{
+// 		bitlen:  oeCount,
+// 		varname: sz + "Mask",
+// 	}
+// 	if oeCount > 0 {
+// 		// Declare mask
+// 		d.p.printf("\n%s", bm.typeDecl())
+// 		d.p.printf("\n_ = %s", bm.varname)
+// 	}
+// 	// Index to field idx of each emitted
+// 	oeEmittedIdx := []int{}
 
-	d.p.printf("\nfor %s > 0 {\n%s--", sz, sz)
-	d.assignAndCheck("field", mapKey)
-	d.p.print("\nswitch msgp.UnsafeString(field) {")
-	for i := range s.Fields {
-		d.ctx.PushString(s.Fields[i].FieldName)
-		d.p.printf("\ncase %q:", s.Fields[i].FieldTag)
-		fieldElem := s.Fields[i].FieldElem
-		anField := s.Fields[i].HasTagPart("allownil") && fieldElem.AllowNil()
-		if anField {
-			d.p.print("\nif dc.IsNil() {")
-			d.p.print("\nerr = dc.ReadNil()")
-			d.p.wrapErrCheck(d.ctx.ArgsStr())
-			d.p.printf("\n%s = nil\n} else {", fieldElem.Varname())
-		}
-		SetIsAllowNil(fieldElem, anField)
-		next(d, fieldElem)
-		if oeCount > 0 && (s.Fields[i].HasTagPart("omitempty") || s.Fields[i].HasTagPart("omitzero")) {
-			d.p.printf("\n%s", bm.setStmt(len(oeEmittedIdx)))
-			oeEmittedIdx = append(oeEmittedIdx, i)
-		}
-		d.ctx.Pop()
-		if !d.p.ok() {
-			return
-		}
-		if anField {
-			d.p.printf("\n}") // close if statement
-		}
-	}
-	d.p.print("\ndefault:\nerr = dc.Skip()")
-	d.p.wrapErrCheck(d.ctx.ArgsStr())
+// 	d.p.printf("\nfor %s > 0 {\n%s--", sz, sz)
+// 	d.assignAndCheck("field", mapKey)
+// 	d.p.print("\nswitch msgp.UnsafeString(field) {")
+// 	for i := range s.Fields {
+// 		d.ctx.PushString(s.Fields[i].FieldName)
+// 		d.p.printf("\ncase %q:", s.Fields[i].FieldTag)
+// 		fieldElem := s.Fields[i].FieldElem
+// 		anField := s.Fields[i].HasTagPart("allownil") && fieldElem.AllowNil()
+// 		if anField {
+// 			d.p.print("\nif dc.IsNil() {")
+// 			d.p.print("\nerr = dc.ReadNil()")
+// 			d.p.wrapErrCheck(d.ctx.ArgsStr())
+// 			d.p.printf("\n%s = nil\n} else {", fieldElem.Varname())
+// 		}
+// 		SetIsAllowNil(fieldElem, anField)
+// 		next(d, fieldElem)
+// 		if oeCount > 0 && (s.Fields[i].HasTagPart("omitempty") || s.Fields[i].HasTagPart("omitzero")) {
+// 			d.p.printf("\n%s", bm.setStmt(len(oeEmittedIdx)))
+// 			oeEmittedIdx = append(oeEmittedIdx, i)
+// 		}
+// 		d.ctx.Pop()
+// 		if !d.p.ok() {
+// 			return
+// 		}
+// 		if anField {
+// 			d.p.printf("\n}") // close if statement
+// 		}
+// 	}
+// 	d.p.print("\ndefault:\nerr = dc.Skip()")
+// 	d.p.wrapErrCheck(d.ctx.ArgsStr())
 
-	d.p.closeblock() // close switch
-	d.p.closeblock() // close for loop
+// 	d.p.closeblock() // close switch
+// 	d.p.closeblock() // close for loop
 
-	if oeCount > 0 {
-		d.p.printf("\n// Clear omitted fields.\n")
-		if bm.bitlen > 1 {
-			d.p.printf("if %s {\n", bm.notAllSet())
-		}
-		for bitIdx, fieldIdx := range oeEmittedIdx {
-			fieldElem := s.Fields[fieldIdx].FieldElem
+// 	if oeCount > 0 {
+// 		d.p.printf("\n// Clear omitted fields.\n")
+// 		if bm.bitlen > 1 {
+// 			d.p.printf("if %s {\n", bm.notAllSet())
+// 		}
+// 		for bitIdx, fieldIdx := range oeEmittedIdx {
+// 			fieldElem := s.Fields[fieldIdx].FieldElem
 
-			d.p.printf("if %s == 0 {\n", bm.readExpr(bitIdx))
-			fze := fieldElem.ZeroExpr()
-			if fze != "" {
-				d.p.printf("%s = %s\n", fieldElem.Varname(), fze)
-			} else {
-				d.p.printf("%s = %s{}\n", fieldElem.Varname(), fieldElem.TypeName())
-			}
-			d.p.printf("}\n")
-		}
-		if bm.bitlen > 1 {
-			d.p.printf("}")
-		}
-	}
-}
+// 			d.p.printf("if %s == 0 {\n", bm.readExpr(bitIdx))
+// 			fze := fieldElem.ZeroExpr()
+// 			if fze != "" {
+// 				d.p.printf("%s = %s\n", fieldElem.Varname(), fze)
+// 			} else {
+// 				d.p.printf("%s = %s{}\n", fieldElem.Varname(), fieldElem.TypeName())
+// 			}
+// 			d.p.printf("}\n")
+// 		}
+// 		if bm.bitlen > 1 {
+// 			d.p.printf("}")
+// 		}
+// 	}
+// }
 
 func (d *decodeGen) gBase(b *BaseElem) {
 	if !d.p.ok() {
@@ -257,9 +258,9 @@ func (d *decodeGen) gMap(m *Map) {
 	// pair and assign
 	d.needsField()
 	d.p.printf("\nfor %s > 0 {\n%s--", sz, sz)
-	d.p.declare(m.Keyidx, "string")
+	d.p.declare(m.Keyidx, m.Key.TypeName())
 	d.p.declare(m.Validx, m.Value.TypeName())
-	d.assignAndCheck(m.Keyidx, stringTyp)
+	d.assignAndCheck(m.Keyidx, strings.Title(m.Key.TypeName())) // stringTyp)
 	d.ctx.PushVar(m.Keyidx)
 	m.Value.SetIsAllowNil(false)
 	next(d, m.Value)
@@ -305,11 +306,25 @@ func (d *decodeGen) gPtr(p *Ptr) {
 	if !d.p.ok() {
 		return
 	}
-	d.p.print("\nif dc.IsNil() {")
-	d.p.print("\nerr = dc.ReadNil()")
-	d.p.wrapErrCheck(d.ctx.ArgsStr())
-	d.p.printf("\n%s = nil\n} else {", p.Varname())
+	//d.p.print("\nif dc.IsNil() {")
+	//d.p.print("\nerr = dc.ReadNil()")
+	//d.p.wrapErrCheck(d.ctx.ArgsStr())
+	//d.p.printf("\n%s = nil\n} else {", p.Varname())
 	d.p.initPtr(p)
 	next(d, p.Value)
-	d.p.closeblock()
+	//d.p.closeblock()
+}
+
+func (d *decodeGen) gNilSpaceholder() {
+	if !d.p.ok() {
+		return
+	}
+	d.p.printf("\nerr = dc.ReadNil(); if err != nil { return; }")
+}
+
+func (d *decodeGen) gCsharpString(s *CsharpString) {
+	if !d.p.ok() {
+		return
+	}
+	d.p.printf("\n"+`if dc.IsNil() {err = dc.ReadNil(); return}else {%s, err = dc.ReadString(); if err != nil {return}}`, s.Varname())
 }

@@ -1,9 +1,11 @@
 package parse
 
 import (
+	"errors"
+	"fmt"
 	"sort"
 
-	"github.com/tinylib/msgp/gen"
+	"github.com/aggronmagi/csmsgp2go/gen"
 )
 
 // This file defines when and how we
@@ -80,7 +82,7 @@ func (f *FileSet) nextShim(ref *gen.Elem, id string, e gen.Elem) {
 }
 
 // propInline identifies and inlines candidates
-func (f *FileSet) propInline() {
+func (f *FileSet) propInline() (err error) {
 	type gelem struct {
 		name string
 		el   gen.Elem
@@ -106,28 +108,43 @@ func (f *FileSet) propInline() {
 		pushstate(name)
 		switch el := all[i].el.(type) {
 		case *gen.Struct:
+			tagsValue := [256]uint16{}
 			for i := range el.Fields {
-				f.nextInline(&el.Fields[i].FieldElem, name)
+				err2 := f.nextInline(&el.Fields[i].FieldElem, name)
+				if err2 != nil {
+					err = err2
+				}
+				if tagsValue[el.Fields[i].FieldTag] != 0 {
+					err = errors.New("tag value repeated")
+					warnf("tag value %d repeated", el.Fields[i].FieldTag)
+					continue
+				}
+				tagsValue[el.Fields[i].FieldTag] = el.Fields[i].FieldTag
 			}
 		case *gen.Array:
-			f.nextInline(&el.Els, name)
+			err = f.nextInline(&el.Els, name)
 		case *gen.Slice:
-			f.nextInline(&el.Els, name)
+			err = f.nextInline(&el.Els, name)
 		case *gen.Map:
-			f.nextInline(&el.Value, name)
+			err = f.nextInline(&el.Value, name)
 		case *gen.Ptr:
-			f.nextInline(&el.Value, name)
+			err = f.nextInline(&el.Value, name)
 		}
 		popstate()
+		if err != nil {
+			return err
+		}
 	}
+
+	return nil
 }
 
 const fatalloop = `detected infinite recursion in inlining loop!
-Please file a bug at github.com/tinylib/msgp/issues!
+Please file a bug at github.com/aggronmagi/csmsgp2go/issues!
 Thanks!
 `
 
-func (f *FileSet) nextInline(ref *gen.Elem, root string) {
+func (f *FileSet) nextInline(ref *gen.Elem, root string) (err error) {
 	switch el := (*ref).(type) {
 	case *gen.BaseElem:
 		// ensure that we're not inlining
@@ -144,27 +161,46 @@ func (f *FileSet) nextInline(ref *gen.Elem, root string) {
 				}
 
 				*ref = node.Copy()
-				f.nextInline(ref, node.TypeName())
+				err = f.nextInline(ref, node.TypeName())
+				if err != nil {
+					return err
+				}
 			} else if !ok && !el.Resolved() {
 				// this is the point at which we're sure that
 				// we've got a type that isn't a primitive,
 				// a library builtin, or a processed type
 				warnf("unresolved identifier: %s\n", typ)
+				return fmt.Errorf("unresolved identifier: %s", typ)
 			}
 		}
 	case *gen.Struct:
+		tagsValue := [256]uint16{}
 		for i := range el.Fields {
-			f.nextInline(&el.Fields[i].FieldElem, root)
+			err2 := f.nextInline(&el.Fields[i].FieldElem, root)
+			if err2 != nil {
+				err = err2
+			}
+
+			if tagsValue[el.Fields[i].FieldTag] != 0 {
+				err = errors.New("tag value repeated")
+				warnf("tag value %d repeated", el.Fields[i].FieldTag)
+				continue
+			}
+			tagsValue[el.Fields[i].FieldTag] = el.Fields[i].FieldTag
 		}
 	case *gen.Array:
-		f.nextInline(&el.Els, root)
+		return f.nextInline(&el.Els, root)
 	case *gen.Slice:
-		f.nextInline(&el.Els, root)
+		return f.nextInline(&el.Els, root)
 	case *gen.Map:
-		f.nextInline(&el.Value, root)
+		return f.nextInline(&el.Value, root)
 	case *gen.Ptr:
-		f.nextInline(&el.Value, root)
+		return f.nextInline(&el.Value, root)
+	case *gen.CsharpString:
+		return nil
 	default:
-		panic("bad elem type")
+		//panic("bad elem type")
+		return errors.New("bad elem type")
 	}
+	return nil
 }

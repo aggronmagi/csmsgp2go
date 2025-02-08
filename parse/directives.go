@@ -6,7 +6,7 @@ import (
 	"go/parser"
 	"strings"
 
-	"github.com/tinylib/msgp/gen"
+	"github.com/aggronmagi/csmsgp2go/gen"
 )
 
 const linePrefix = "//msgp:"
@@ -22,10 +22,10 @@ type passDirective func(gen.Method, []string, *gen.Printer) error
 // to add a directive, define a func([]string, *FileSet) error
 // and then add it to this list.
 var directives = map[string]directive{
-	"shim":          applyShim,
-	"replace":       replace,
-	"ignore":        ignore,
-	"tuple":         astuple,
+	"shim":    applyShim,
+	"replace": replace,
+	"ignore":  ignore,
+	//"tuple":         astuple,
 	"compactfloats": compactfloats,
 	"clearomitted":  clearomitted,
 	"newtime":       newtime,
@@ -123,7 +123,10 @@ func replace(text []string, f *FileSet) error {
 	if err != nil {
 		return err
 	}
-	e := f.parseExpr(expr)
+	e, err := f.parseExpr(expr)
+	if err != nil {
+		return err
+	}
 	e.AlwaysPtr(&f.pointerRcv)
 
 	if be, ok := e.(*gen.BaseElem); ok {
@@ -156,24 +159,24 @@ func ignore(text []string, f *FileSet) error {
 	return nil
 }
 
-//msgp:tuple {TypeA} {TypeB}...
-func astuple(text []string, f *FileSet) error {
-	if len(text) < 2 {
-		return nil
-	}
-	for _, item := range text[1:] {
-		name := strings.TrimSpace(item)
-		if el, ok := f.Identities[name]; ok {
-			if st, ok := el.(*gen.Struct); ok {
-				st.AsTuple = true
-				infof(name)
-			} else {
-				warnf("%s: only structs can be tuples\n", name)
-			}
-		}
-	}
-	return nil
-}
+// //msgp:tuple {TypeA} {TypeB}...
+// func astuple(text []string, f *FileSet) error {
+// 	if len(text) < 2 {
+// 		return nil
+// 	}
+// 	for _, item := range text[1:] {
+// 		name := strings.TrimSpace(item)
+// 		if el, ok := f.Identities[name]; ok {
+// 			if st, ok := el.(*gen.Struct); ok {
+// 				st.AsTuple = true
+// 				infof(name)
+// 			} else {
+// 				warnf("%s: only structs can be tuples\n", name)
+// 			}
+// 		}
+// 	}
+// 	return nil
+// }
 
 //msgp:tag {tagname}
 func tag(text []string, f *FileSet) error {

@@ -279,12 +279,52 @@ func (a *Array) ZeroExpr() string { return "" }
 // IfZeroExpr unsupported
 func (a *Array) IfZeroExpr() string { return "" }
 
+type NilPlaceholder struct {
+	common
+}
+
+var _ Elem = &NilPlaceholder{}
+
+func (n *NilPlaceholder) Copy() Elem {
+	return &NilPlaceholder{}
+}
+
+func (n *NilPlaceholder) TypeName() string   { return "" }
+func (n *NilPlaceholder) Complexity() int    { return 1 }
+func (n *NilPlaceholder) ZeroExpr() string   { return "" }
+func (n *NilPlaceholder) IfZeroExpr() string { return "" }
+
+type CsharpString struct {
+	common
+}
+
+func (a *CsharpString) TypeName() string {
+	if a.common.alias != "" {
+		return a.common.alias
+	}
+	a.common.Alias("string")
+	return a.common.alias
+}
+
+func (a *CsharpString) Copy() Elem {
+	b := *a
+	return &b
+}
+
+func (a *CsharpString) Complexity() int {
+	return 1
+}
+
+func (a *CsharpString) ZeroExpr() string   { return `""` }
+func (a *CsharpString) IfZeroExpr() string { return "len(" + a.Varname() + ") == 0" }
+
 // Map is a map[string]Elem
 type Map struct {
 	common
 	Keyidx     string // key variable name
 	Validx     string // value variable name
 	Value      Elem   // value element
+	Key        Elem   // key element
 	isAllowNil bool
 }
 
@@ -327,8 +367,8 @@ func (m *Map) ZeroExpr() string { return "nil" }
 // IfZeroExpr returns the expression to compare to zero/empty.
 func (m *Map) IfZeroExpr() string { return m.Varname() + " == nil" }
 
-// AllowNil is true for maps.
-func (m *Map) AllowNil() bool { return true }
+// // AllowNil is true for maps.
+// func (m *Map) AllowNil() bool { return true }
 
 // SetIsAllowNil sets whether the map is allowed to be nil.
 func (m *Map) SetIsAllowNil(b bool) { m.isAllowNil = b }
@@ -376,8 +416,8 @@ func (s *Slice) ZeroExpr() string { return "nil" }
 // IfZeroExpr returns the expression to compare to zero/empty.
 func (s *Slice) IfZeroExpr() string { return s.Varname() + " == nil" }
 
-// AllowNil is true for slices.
-func (s *Slice) AllowNil() bool { return true }
+// // AllowNil is true for slices.
+// func (s *Slice) AllowNil() bool { return true }
 
 // SetIsAllowNil sets whether the slice is allowed to be nil.
 func (s *Slice) SetIsAllowNil(b bool) { s.isAllowNil = b }
@@ -459,8 +499,9 @@ func (s *Ptr) IfZeroExpr() string { return s.Varname() + " == nil" }
 
 type Struct struct {
 	common
-	Fields  []StructField // field list
-	AsTuple bool          // write as an array instead of a map
+	Fields []StructField // field list
+	// all struct encode tuple
+	//AsTuple bool          // write as an array instead of a map
 }
 
 func (s *Struct) TypeName() string {
@@ -539,7 +580,7 @@ func (s *Struct) CountFieldTagPart(pname string) int {
 }
 
 type StructField struct {
-	FieldTag      string   // the string inside the `msg:""` tag up to the first comma
+	FieldTag      uint16   // the string inside the `msg:""` tag up to the first comma
 	FieldTagParts []string // the string inside the `msg:""` tag split by commas
 	RawTag        string   // the full struct tag
 	FieldName     string   // the name of the struct field
@@ -728,7 +769,7 @@ func (s *BaseElem) ZeroExpr() string {
 	case Bytes:
 		return "nil"
 	case String:
-		return "\"\""
+		return `""`
 	case Complex64, Complex128:
 		return "complex(0,0)"
 	case Float32,

@@ -1,6 +1,6 @@
 package main
 
-//go:generate msgp
+//go:generate csmsgp2go
 
 type Example struct {
 	I int    `msg:"i"`

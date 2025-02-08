@@ -3,6 +3,7 @@ package gen
 import (
 	"io"
 	"strconv"
+	"strings"
 )
 
 func unmarshal(w io.Writer) *unmarshalGen {
@@ -65,11 +66,11 @@ func (u *unmarshalGen) gStruct(s *Struct) {
 	if !u.p.ok() {
 		return
 	}
-	if s.AsTuple {
-		u.tuple(s)
-	} else {
-		u.mapstruct(s)
-	}
+	//if s.AsTuple {
+	u.tuple(s)
+	// } else {
+	// 	u.mapstruct(s)
+	// }
 }
 
 func (u *unmarshalGen) tuple(s *Struct) {
@@ -82,6 +83,7 @@ func (u *unmarshalGen) tuple(s *Struct) {
 		if !u.p.ok() {
 			return
 		}
+		u.p.printf("\n// idx %d", i)
 		u.ctx.PushString(s.Fields[i].FieldName)
 		fieldElem := s.Fields[i].FieldElem
 		anField := s.Fields[i].HasTagPart("allownil") && fieldElem.AllowNil()
@@ -97,80 +99,80 @@ func (u *unmarshalGen) tuple(s *Struct) {
 	}
 }
 
-func (u *unmarshalGen) mapstruct(s *Struct) {
-	u.needsField()
-	sz := randIdent()
-	u.p.declare(sz, u32)
-	u.assignAndCheck(sz, mapHeader)
+// func (u *unmarshalGen) mapstruct(s *Struct) {
+// 	u.needsField()
+// 	sz := randIdent()
+// 	u.p.declare(sz, u32)
+// 	u.assignAndCheck(sz, mapHeader)
 
-	oeCount := s.CountFieldTagPart("omitempty") + s.CountFieldTagPart("omitzero")
-	if !u.ctx.clearOmitted {
-		oeCount = 0
-	}
-	bm := bmask{
-		bitlen:  oeCount,
-		varname: sz + "Mask",
-	}
-	if oeCount > 0 {
-		// Declare mask
-		u.p.printf("\n%s", bm.typeDecl())
-		u.p.printf("\n_ = %s", bm.varname)
-	}
-	// Index to field idx of each emitted
-	oeEmittedIdx := []int{}
+// 	oeCount := s.CountFieldTagPart("omitempty") + s.CountFieldTagPart("omitzero")
+// 	if !u.ctx.clearOmitted {
+// 		oeCount = 0
+// 	}
+// 	bm := bmask{
+// 		bitlen:  oeCount,
+// 		varname: sz + "Mask",
+// 	}
+// 	if oeCount > 0 {
+// 		// Declare mask
+// 		u.p.printf("\n%s", bm.typeDecl())
+// 		u.p.printf("\n_ = %s", bm.varname)
+// 	}
+// 	// Index to field idx of each emitted
+// 	oeEmittedIdx := []int{}
 
-	u.p.printf("\nfor %s > 0 {", sz)
-	u.p.printf("\n%s--; field, bts, err = msgp.ReadMapKeyZC(bts)", sz)
-	u.p.wrapErrCheck(u.ctx.ArgsStr())
-	u.p.print("\nswitch msgp.UnsafeString(field) {")
-	for i := range s.Fields {
-		if !u.p.ok() {
-			return
-		}
-		u.p.printf("\ncase %q:", s.Fields[i].FieldTag)
-		u.ctx.PushString(s.Fields[i].FieldName)
+// 	u.p.printf("\nfor %s > 0 {", sz)
+// 	u.p.printf("\n%s--; field, bts, err = msgp.ReadMapKeyZC(bts)", sz)
+// 	u.p.wrapErrCheck(u.ctx.ArgsStr())
+// 	u.p.print("\nswitch msgp.UnsafeString(field) {")
+// 	for i := range s.Fields {
+// 		if !u.p.ok() {
+// 			return
+// 		}
+// 		u.p.printf("\ncase %q:", s.Fields[i].FieldTag)
+// 		u.ctx.PushString(s.Fields[i].FieldName)
 
-		fieldElem := s.Fields[i].FieldElem
-		anField := s.Fields[i].HasTagPart("allownil") && fieldElem.AllowNil()
-		if anField {
-			u.p.printf("\nif msgp.IsNil(bts) {\nbts = bts[1:]\n%s = nil\n} else {", fieldElem.Varname())
-		}
-		SetIsAllowNil(fieldElem, anField)
-		next(u, fieldElem)
-		u.ctx.Pop()
-		if oeCount > 0 && (s.Fields[i].HasTagPart("omitempty") || s.Fields[i].HasTagPart("omitzero")) {
-			u.p.printf("\n%s", bm.setStmt(len(oeEmittedIdx)))
-			oeEmittedIdx = append(oeEmittedIdx, i)
-		}
-		if anField {
-			u.p.printf("\n}")
-		}
-	}
-	u.p.print("\ndefault:\nbts, err = msgp.Skip(bts)")
-	u.p.wrapErrCheck(u.ctx.ArgsStr())
-	u.p.print("\n}\n}") // close switch and for loop
-	if oeCount > 0 {
-		u.p.printf("\n// Clear omitted fields.\n")
-		if bm.bitlen > 1 {
-			u.p.printf("if %s {\n", bm.notAllSet())
-		}
-		for bitIdx, fieldIdx := range oeEmittedIdx {
-			fieldElem := s.Fields[fieldIdx].FieldElem
+// 		fieldElem := s.Fields[i].FieldElem
+// 		anField := s.Fields[i].HasTagPart("allownil") && fieldElem.AllowNil()
+// 		if anField {
+// 			u.p.printf("\nif msgp.IsNil(bts) {\nbts = bts[1:]\n%s = nil\n} else {", fieldElem.Varname())
+// 		}
+// 		SetIsAllowNil(fieldElem, anField)
+// 		next(u, fieldElem)
+// 		u.ctx.Pop()
+// 		if oeCount > 0 && (s.Fields[i].HasTagPart("omitempty") || s.Fields[i].HasTagPart("omitzero")) {
+// 			u.p.printf("\n%s", bm.setStmt(len(oeEmittedIdx)))
+// 			oeEmittedIdx = append(oeEmittedIdx, i)
+// 		}
+// 		if anField {
+// 			u.p.printf("\n}")
+// 		}
+// 	}
+// 	u.p.print("\ndefault:\nbts, err = msgp.Skip(bts)")
+// 	u.p.wrapErrCheck(u.ctx.ArgsStr())
+// 	u.p.print("\n}\n}") // close switch and for loop
+// 	if oeCount > 0 {
+// 		u.p.printf("\n// Clear omitted fields.\n")
+// 		if bm.bitlen > 1 {
+// 			u.p.printf("if %s {\n", bm.notAllSet())
+// 		}
+// 		for bitIdx, fieldIdx := range oeEmittedIdx {
+// 			fieldElem := s.Fields[fieldIdx].FieldElem
 
-			u.p.printf("if %s == 0 {\n", bm.readExpr(bitIdx))
-			fze := fieldElem.ZeroExpr()
-			if fze != "" {
-				u.p.printf("%s = %s\n", fieldElem.Varname(), fze)
-			} else {
-				u.p.printf("%s = %s{}\n", fieldElem.Varname(), fieldElem.TypeName())
-			}
-			u.p.printf("}\n")
-		}
-		if bm.bitlen > 1 {
-			u.p.printf("}")
-		}
-	}
-}
+// 			u.p.printf("if %s == 0 {\n", bm.readExpr(bitIdx))
+// 			fze := fieldElem.ZeroExpr()
+// 			if fze != "" {
+// 				u.p.printf("%s = %s\n", fieldElem.Varname(), fze)
+// 			} else {
+// 				u.p.printf("%s = %s{}\n", fieldElem.Varname(), fieldElem.TypeName())
+// 			}
+// 			u.p.printf("}\n")
+// 		}
+// 		if bm.bitlen > 1 {
+// 			u.p.printf("}")
+// 		}
+// 	}
+// }
 
 func (u *unmarshalGen) gBase(b *BaseElem) {
 	if !u.p.ok() {
@@ -270,8 +272,8 @@ func (u *unmarshalGen) gMap(m *Map) {
 
 	// loop and get key,value
 	u.p.printf("\nfor %s > 0 {", sz)
-	u.p.printf("\nvar %s string; var %s %s; %s--", m.Keyidx, m.Validx, m.Value.TypeName(), sz)
-	u.assignAndCheck(m.Keyidx, stringTyp)
+	u.p.printf("\nvar %s %s; var %s %s; %s--", m.Keyidx, m.Key.TypeName(), m.Validx, m.Value.TypeName(), sz)
+	u.assignAndCheck(m.Keyidx, strings.Title(m.Key.TypeName()))
 	u.ctx.PushVar(m.Keyidx)
 	m.Value.SetIsAllowNil(false)
 	next(u, m.Value)
@@ -281,8 +283,20 @@ func (u *unmarshalGen) gMap(m *Map) {
 }
 
 func (u *unmarshalGen) gPtr(p *Ptr) {
-	u.p.printf("\nif msgp.IsNil(bts) { bts, err = msgp.ReadNilBytes(bts); if err != nil { return }; %s = nil; } else { ", p.Varname())
+	//u.p.printf("\nif msgp.IsNil(bts) { bts, err = msgp.ReadNilBytes(bts); if err != nil { return }; %s = nil; } else { ", p.Varname())
 	u.p.initPtr(p)
 	next(u, p.Value)
-	u.p.closeblock()
+	//u.p.closeblock()
+}
+
+func (u *unmarshalGen) gNilSpaceholder() {
+	u.p.printf("\nbts, err = msgp.ReadNilBytes(bts)\n if err != nil { return }; ")
+}
+
+func (u *unmarshalGen) gCsharpString(s *CsharpString) {
+	if !u.p.ok() {
+		return
+	}
+	// if dc.isnill readnil else readstring
+	u.p.printf("\n"+`if msgp.IsNil(bts) { bts, err = msgp.ReadNilBytes(bts); if err != nil { return }; %s = ""; } else { %s, bts, err = msgp.ReadStringBytes(bts) }`, s.Varname(), s.Varname())
 }

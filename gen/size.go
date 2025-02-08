@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"strconv"
+	"strings"
 
 	"github.com/tinylib/msgp/msgp"
 )
@@ -108,33 +109,35 @@ func (s *sizeGen) gStruct(st *Struct) {
 
 	nfields := uint32(len(st.Fields))
 
-	if st.AsTuple {
-		data := msgp.AppendArrayHeader(nil, nfields)
-		s.addConstant(strconv.Itoa(len(data)))
-		for i := range st.Fields {
-			if !s.p.ok() {
-				return
-			}
-			next(s, st.Fields[i].FieldElem)
+	//	if st.AsTuple {
+	data := msgp.AppendArrayHeader(nil, nfields)
+	s.addConstant(strconv.Itoa(len(data)))
+	for i := range st.Fields {
+		if !s.p.ok() {
+			return
 		}
-	} else {
-		data := msgp.AppendMapHeader(nil, nfields)
-		s.addConstant(strconv.Itoa(len(data)))
-		for i := range st.Fields {
-			data = data[:0]
-			data = msgp.AppendString(data, st.Fields[i].FieldTag)
-			s.addConstant(strconv.Itoa(len(data)))
-			next(s, st.Fields[i].FieldElem)
-		}
+		s.p.printf("/* idx %d */", i)
+		next(s, st.Fields[i].FieldElem)
 	}
+	s.p.print("\n")
+	// } else {
+	// 	data := msgp.AppendMapHeader(nil, nfields)
+	// 	s.addConstant(strconv.Itoa(len(data)))
+	// 	for i := range st.Fields {
+	// 		data = data[:0]
+	// 		data = msgp.AppendString(data, st.Fields[i].FieldTag)
+	// 		s.addConstant(strconv.Itoa(len(data)))
+	// 		next(s, st.Fields[i].FieldElem)
+	// 	}
+	// }
 }
 
 func (s *sizeGen) gPtr(p *Ptr) {
 	s.state = add // inner must use add
-	s.p.printf("\nif %s == nil {\ns += msgp.NilSize\n} else {", p.Varname())
+	//s.p.printf("\nif %s == nil {\ns += msgp.NilSize\n} else {", p.Varname())
 	next(s, p.Value)
 	s.state = add // closing block; reset to add
-	s.p.closeblock()
+	//s.p.closeblock()
 }
 
 func (s *sizeGen) gSlice(sl *Slice) {
@@ -156,6 +159,7 @@ func (s *sizeGen) gSlice(sl *Slice) {
 	s.state = add
 	s.p.rangeBlock(s.ctx, sl.Index, sl.Varname(), s, sl.Els)
 	s.state = add
+	s.p.print("\n")
 }
 
 func (s *sizeGen) gArray(a *Array) {
@@ -176,6 +180,7 @@ func (s *sizeGen) gArray(a *Array) {
 	s.state = add
 	s.p.rangeBlock(s.ctx, a.Index, a.Varname(), s, a.Els)
 	s.state = add
+	s.p.print("\n")
 }
 
 func (s *sizeGen) gMap(m *Map) {
@@ -184,7 +189,12 @@ func (s *sizeGen) gMap(m *Map) {
 	s.p.printf("\nif %s != nil {", vn)
 	s.p.printf("\nfor %s, %s := range %s {", m.Keyidx, m.Validx, vn)
 	s.p.printf("\n_ = %s", m.Validx) // we may not use the value
-	s.p.printf("\ns += msgp.StringPrefixSize + len(%s)", m.Keyidx)
+	if m.Key.TypeName() == "string" {
+		s.p.printf("\ns += msgp.StringPrefixSize + len(%s)", m.Keyidx)
+	} else {
+		s.p.printf("\n_ = %s", m.Keyidx) // we may not use the value
+		s.p.printf("\ns += msgp.%sSize", strings.Title(m.Key.TypeName()))
+	}
 	s.state = expr
 	s.ctx.PushVar(m.Keyidx)
 	next(s, m.Value)
@@ -192,6 +202,8 @@ func (s *sizeGen) gMap(m *Map) {
 	s.p.closeblock()
 	s.p.closeblock()
 	s.state = add
+	s.p.print("\n")
+
 }
 
 func (s *sizeGen) gBase(b *BaseElem) {
@@ -216,6 +228,24 @@ func (s *sizeGen) gBase(b *BaseElem) {
 		}
 		s.addConstant(basesizeExpr(b.Value, vname, b.BaseName()))
 	}
+}
+
+func (s *sizeGen) gNilSpaceholder() {
+	if !s.p.ok() {
+		return
+	}
+	//s.p.printf("\ns += msgp.NilSize")
+	s.addConstant(builtinSize("Nil"))
+	//s.state = expr
+}
+
+func (s *sizeGen) gCsharpString(cs *CsharpString) {
+	if !s.p.ok() {
+		return
+	}
+	s.p.printf("\n"+`if len(%s) == 0 { s += msgp.NilSize } else { s += msgp.StringPrefixSize + len(%s) }`, cs.Varname(), cs.Varname())
+	s.state = add
+	s.p.print("\n")
 }
 
 // returns "len(slice)"
@@ -269,13 +299,14 @@ func fixedsizeExpr(e Elem) (string, bool) {
 			}
 		}
 		var hdrlen int
-		mhdr := msgp.AppendMapHeader(nil, uint32(len(e.Fields)))
+		//mhdr := msgp.AppendMapHeader(nil, uint32(len(e.Fields)))
+		mhdr := msgp.AppendArrayHeader(nil, uint32(len(e.Fields)))
 		hdrlen += len(mhdr)
-		var strbody []byte
-		for _, f := range e.Fields {
-			strbody = msgp.AppendString(strbody[:0], f.FieldTag)
-			hdrlen += len(strbody)
-		}
+		// var strbody []byte
+		// for _, f := range e.Fields {
+		// 	strbody = msgp.AppendString(strbody[:0], f.FieldTag)
+		// 	hdrlen += len(strbody)
+		// }
 		return fmt.Sprintf("%d + %s", hdrlen, str), true
 	}
 	return "", false

@@ -6,7 +6,7 @@
 // To use it, include the following directive in a
 // go source file with types requiring source generation:
 //
-//	//go:generate msgp
+//	//go:generate csmsgp2go
 //
 // The go generate tool should set the proper environment variables for
 // the generator to execute without any command-line flags. However, the
@@ -18,7 +18,7 @@
 //	-marshal = satisfy the `msgp.Marshaler` and `msgp.Unmarshaler` interfaces (default is true)
 //	-tests = generate tests and benchmarks (default is true)
 //
-// For more information, please read README.md, and the wiki at github.com/tinylib/msgp
+// For more information, please read README.md, and the wiki at github.com/aggronmagi/csmsgp2go
 package main
 
 import (
@@ -28,15 +28,15 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/tinylib/msgp/gen"
-	"github.com/tinylib/msgp/parse"
-	"github.com/tinylib/msgp/printer"
+	"github.com/aggronmagi/csmsgp2go/gen"
+	"github.com/aggronmagi/csmsgp2go/parse"
+	"github.com/aggronmagi/csmsgp2go/printer"
 )
 
 var (
 	out        = flag.String("o", "", "output file")
 	file       = flag.String("file", "", "input file")
-	encode     = flag.Bool("io", true, "create Encode and Decode methods")
+	encode     = flag.Bool("io", false, "create Encode and Decode methods")
 	marshal    = flag.Bool("marshal", true, "create Marshal and Unmarshal methods")
 	tests      = flag.Bool("tests", true, "create tests and benchmarks")
 	unexported = flag.Bool("unexported", false, "also process unexported types")

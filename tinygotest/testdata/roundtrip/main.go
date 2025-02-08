@@ -6,7 +6,7 @@ import (
 	"github.com/tinylib/msgp/msgp"
 )
 
-//go:generate msgp
+//go:generate csmsgp2go
 
 type SomeStruct struct {
 	A string `msg:"a"`

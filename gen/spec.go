@@ -240,6 +240,8 @@ type traversal interface {
 	gPtr(*Ptr)
 	gBase(*BaseElem)
 	gStruct(*Struct)
+	gNilSpaceholder()
+	gCsharpString(*CsharpString)
 }
 
 // type-switch dispatch to the correct
@@ -258,6 +260,10 @@ func next(t traversal, e Elem) {
 		t.gPtr(e)
 	case *BaseElem:
 		t.gBase(e)
+	case *NilPlaceholder:
+		t.gNilSpaceholder()
+	case *CsharpString:
+		t.gCsharpString(e)
 	default:
 		panic("bad element type")
 	}

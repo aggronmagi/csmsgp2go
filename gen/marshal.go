@@ -3,6 +3,7 @@ package gen
 import (
 	"fmt"
 	"io"
+	"strings"
 
 	"github.com/tinylib/msgp/msgp"
 )
@@ -92,11 +93,11 @@ func (m *marshalGen) gStruct(s *Struct) {
 		return
 	}
 
-	if s.AsTuple {
-		m.tuple(s)
-	} else {
-		m.mapstruct(s)
-	}
+	//if s.AsTuple {
+	m.tuple(s)
+	// } else {
+	// 	m.mapstruct(s)
+	// }
 }
 
 func (m *marshalGen) tuple(s *Struct) {
@@ -111,6 +112,7 @@ func (m *marshalGen) tuple(s *Struct) {
 		if !m.p.ok() {
 			return
 		}
+		m.p.printf("\n// idx %d", i)
 		fieldElem := s.Fields[i].FieldElem
 		anField := s.Fields[i].HasTagPart("allownil") && fieldElem.AllowNil()
 		if anField {
@@ -128,111 +130,111 @@ func (m *marshalGen) tuple(s *Struct) {
 	}
 }
 
-func (m *marshalGen) mapstruct(s *Struct) {
-	oeIdentPrefix := randIdent()
+// func (m *marshalGen) mapstruct(s *Struct) {
+// 	oeIdentPrefix := randIdent()
 
-	var data []byte
-	nfields := len(s.Fields)
-	bm := bmask{
-		bitlen:  nfields,
-		varname: oeIdentPrefix + "Mask",
-	}
+// 	var data []byte
+// 	nfields := len(s.Fields)
+// 	bm := bmask{
+// 		bitlen:  nfields,
+// 		varname: oeIdentPrefix + "Mask",
+// 	}
 
-	omitempty := s.AnyHasTagPart("omitempty")
-	omitzero := s.AnyHasTagPart("omitzero")
-	var closeZero bool
-	var fieldNVar string
-	if omitempty || omitzero {
+// 	omitempty := s.AnyHasTagPart("omitempty")
+// 	omitzero := s.AnyHasTagPart("omitzero")
+// 	var closeZero bool
+// 	var fieldNVar string
+// 	if omitempty || omitzero {
 
-		fieldNVar = oeIdentPrefix + "Len"
+// 		fieldNVar = oeIdentPrefix + "Len"
 
-		m.p.printf("\n// check for omitted fields")
-		m.p.printf("\n%s := uint32(%d)", fieldNVar, nfields)
-		m.p.printf("\n%s", bm.typeDecl())
-		m.p.printf("\n_ = %s", bm.varname)
-		for i, sf := range s.Fields {
-			if !m.p.ok() {
-				return
-			}
-			if ize := sf.FieldElem.IfZeroExpr(); ize != "" && sf.HasTagPart("omitempty") {
-				m.p.printf("\nif %s {", ize)
-				m.p.printf("\n%s--", fieldNVar)
-				m.p.printf("\n%s", bm.setStmt(i))
-				m.p.printf("\n}")
-			} else if sf.HasTagPart("omitzero") {
-				m.p.printf("\nif %s.IsZero() {", sf.FieldElem.Varname())
-				m.p.printf("\n%s--", fieldNVar)
-				m.p.printf("\n%s", bm.setStmt(i))
-				m.p.printf("\n}")
-			}
-		}
+// 		m.p.printf("\n// check for omitted fields")
+// 		m.p.printf("\n%s := uint32(%d)", fieldNVar, nfields)
+// 		m.p.printf("\n%s", bm.typeDecl())
+// 		m.p.printf("\n_ = %s", bm.varname)
+// 		for i, sf := range s.Fields {
+// 			if !m.p.ok() {
+// 				return
+// 			}
+// 			if ize := sf.FieldElem.IfZeroExpr(); ize != "" && sf.HasTagPart("omitempty") {
+// 				m.p.printf("\nif %s {", ize)
+// 				m.p.printf("\n%s--", fieldNVar)
+// 				m.p.printf("\n%s", bm.setStmt(i))
+// 				m.p.printf("\n}")
+// 			} else if sf.HasTagPart("omitzero") {
+// 				m.p.printf("\nif %s.IsZero() {", sf.FieldElem.Varname())
+// 				m.p.printf("\n%s--", fieldNVar)
+// 				m.p.printf("\n%s", bm.setStmt(i))
+// 				m.p.printf("\n}")
+// 			}
+// 		}
 
-		m.p.printf("\n// variable map header, size %s", fieldNVar)
-		m.p.varAppendMapHeader("o", fieldNVar, nfields)
-		if !m.p.ok() {
-			return
-		}
+// 		m.p.printf("\n// variable map header, size %s", fieldNVar)
+// 		m.p.varAppendMapHeader("o", fieldNVar, nfields)
+// 		if !m.p.ok() {
+// 			return
+// 		}
 
-		// Skip block, if no fields are set.
-		if nfields > 1 {
-			m.p.printf("\n\n// skip if no fields are to be emitted")
-			m.p.printf("\nif %s != 0 {", fieldNVar)
-			closeZero = true
-		}
+// 		// Skip block, if no fields are set.
+// 		if nfields > 1 {
+// 			m.p.printf("\n\n// skip if no fields are to be emitted")
+// 			m.p.printf("\nif %s != 0 {", fieldNVar)
+// 			closeZero = true
+// 		}
 
-	} else {
+// 	} else {
 
-		// non-omitempty version
-		data = make([]byte, 0, 64)
-		data = msgp.AppendMapHeader(data, uint32(len(s.Fields)))
-		m.p.printf("\n// map header, size %d", len(s.Fields))
-		m.Fuse(data)
-		if len(s.Fields) == 0 {
-			m.p.printf("\n_ = %s", s.vname)
-			m.fuseHook()
-		}
+// 		// non-omitempty version
+// 		data = make([]byte, 0, 64)
+// 		data = msgp.AppendMapHeader(data, uint32(len(s.Fields)))
+// 		m.p.printf("\n// map header, size %d", len(s.Fields))
+// 		m.Fuse(data)
+// 		if len(s.Fields) == 0 {
+// 			m.p.printf("\n_ = %s", s.vname)
+// 			m.fuseHook()
+// 		}
 
-	}
+// 	}
 
-	for i := range s.Fields {
-		if !m.p.ok() {
-			return
-		}
+// 	for i := range s.Fields {
+// 		if !m.p.ok() {
+// 			return
+// 		}
 
-		// if field is omitempty or omitzero, wrap with if statement based on the emptymask
-		oeField := (omitempty || omitzero) &&
-			((s.Fields[i].HasTagPart("omitempty") && s.Fields[i].FieldElem.IfZeroExpr() != "") ||
-				s.Fields[i].HasTagPart("omitzero"))
-		if oeField {
-			m.p.printf("\nif %s == 0 { // if not omitted", bm.readExpr(i))
-		}
+// 		// if field is omitempty or omitzero, wrap with if statement based on the emptymask
+// 		oeField := (omitempty || omitzero) &&
+// 			((s.Fields[i].HasTagPart("omitempty") && s.Fields[i].FieldElem.IfZeroExpr() != "") ||
+// 				s.Fields[i].HasTagPart("omitzero"))
+// 		if oeField {
+// 			m.p.printf("\nif %s == 0 { // if not omitted", bm.readExpr(i))
+// 		}
 
-		data = msgp.AppendString(nil, s.Fields[i].FieldTag)
+// 		data = msgp.AppendString(nil, s.Fields[i].FieldTag)
 
-		m.p.printf("\n// string %q", s.Fields[i].FieldTag)
-		m.Fuse(data)
-		m.fuseHook()
+// 		m.p.printf("\n// string %q", s.Fields[i].FieldTag)
+// 		m.Fuse(data)
+// 		m.fuseHook()
 
-		fieldElem := s.Fields[i].FieldElem
-		anField := !oeField && s.Fields[i].HasTagPart("allownil") && fieldElem.AllowNil()
-		if anField {
-			m.p.printf("\nif %s { // allownil: if nil", fieldElem.IfZeroExpr())
-			m.p.printf("\no = msgp.AppendNil(o)")
-			m.p.printf("\n} else {")
-		}
-		m.ctx.PushString(s.Fields[i].FieldName)
-		SetIsAllowNil(fieldElem, anField)
-		next(m, fieldElem)
-		m.ctx.Pop()
+// 		fieldElem := s.Fields[i].FieldElem
+// 		anField := !oeField && s.Fields[i].HasTagPart("allownil") && fieldElem.AllowNil()
+// 		if anField {
+// 			m.p.printf("\nif %s { // allownil: if nil", fieldElem.IfZeroExpr())
+// 			m.p.printf("\no = msgp.AppendNil(o)")
+// 			m.p.printf("\n} else {")
+// 		}
+// 		m.ctx.PushString(s.Fields[i].FieldName)
+// 		SetIsAllowNil(fieldElem, anField)
+// 		next(m, fieldElem)
+// 		m.ctx.Pop()
 
-		if oeField || anField {
-			m.p.printf("\n}") // close if statement
-		}
-	}
-	if closeZero {
-		m.p.printf("\n}") // close if statement
-	}
-}
+// 		if oeField || anField {
+// 			m.p.printf("\n}") // close if statement
+// 		}
+// 	}
+// 	if closeZero {
+// 		m.p.printf("\n}") // close if statement
+// 	}
+// }
 
 // append raw data
 func (m *marshalGen) rawbytes(bts []byte) {
@@ -251,7 +253,7 @@ func (m *marshalGen) gMap(s *Map) {
 	vname := s.Varname()
 	m.rawAppend(mapHeader, lenAsUint32, vname)
 	m.p.printf("\nfor %s, %s := range %s {", s.Keyidx, s.Validx, vname)
-	m.rawAppend(stringTyp, literalFmt, s.Keyidx)
+	m.rawAppend(strings.Title(s.Key.TypeName()), literalFmt, s.Keyidx)
 	m.ctx.PushVar(s.Keyidx)
 	s.Value.SetIsAllowNil(false)
 	next(m, s.Value)
@@ -288,9 +290,9 @@ func (m *marshalGen) gPtr(p *Ptr) {
 		return
 	}
 	m.fuseHook()
-	m.p.printf("\nif %s == nil {\no = msgp.AppendNil(o)\n} else {", p.Varname())
+	//m.p.printf("\nif %s == nil {\no = msgp.AppendNil(o)\n} else {", p.Varname())
 	next(m, p.Value)
-	m.p.closeblock()
+	//m.p.closeblock()
 }
 
 func (m *marshalGen) gBase(b *BaseElem) {
@@ -325,4 +327,20 @@ func (m *marshalGen) gBase(b *BaseElem) {
 	if echeck {
 		m.p.wrapErrCheck(m.ctx.ArgsStr())
 	}
+}
+
+func (m *marshalGen) gNilSpaceholder() {
+	if !m.p.ok() {
+		return
+	}
+	m.fuseHook()
+	m.p.printf("\no = msgp.AppendNil(o)")
+}
+
+func (m *marshalGen) gCsharpString(s *CsharpString) {
+	if !m.p.ok() {
+		return
+	}
+	m.fuseHook()
+	m.p.printf("\nif len(%[1]s) == 0 {o = msgp.AppendNil(o)}else{o = msgp.AppendString(o, string(%[1]s))}", s.Varname())
 }

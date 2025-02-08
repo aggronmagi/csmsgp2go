@@ -12,7 +12,7 @@ import (
 	"testing"
 	"text/template"
 
-	"github.com/tinylib/msgp/gen"
+	"github.com/aggronmagi/csmsgp2go/gen"
 )
 
 // When stuff's going wrong, you'll be glad this is here!
@@ -237,7 +237,7 @@ func goGenerateTpl(cwd, tfile string, tpl *template.Template, tplData interface{
 var issue185IdentsTpl = template.Must(template.New("").Parse(`
 package issue185
 
-//go:generate msgp
+//go:generate csmsgp2go
 
 type Test1 struct {
 	Foo string
@@ -256,7 +256,7 @@ type Test2 struct {
 var issue185ComplexIdentsTpl = template.Must(template.New("").Parse(`
 package issue185
 
-//go:generate msgp
+//go:generate csmsgp2go
 
 type Test1 struct {
 	Foo string
